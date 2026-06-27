@@ -29,6 +29,7 @@ python csv_insights.py data.csv --json       # machine-readable JSON output
   age  [integer]
     fill:  75.0%   missing: 1   unique: 3
     min 23.00  max 31.00  mean 27.33  median 28.00  std 3.30
+    p25 23.00  p75 31.00
 
   city  [text]
     fill: 100.0%   missing: 0   unique: 3
@@ -44,7 +45,7 @@ python csv_insights.py data.csv --json | jq '.profiles[] | {name, dtype, missing
 ## What it does
 - Infers each column's type (`integer`, `float`, `text`, `empty`)
 - Reports fill rate, missing count, and unique count per column
-- Computes min, max, mean, median, and standard deviation for numeric columns
+- Computes min, max, mean, median, standard deviation, and the 25th/75th percentiles for numeric columns
 - Lists the most-frequent values for text/categorical columns (`--top N`)
 - Emits a machine-readable JSON summary with `--json`
 - Handles ragged rows and UTF-8 BOM gracefully
@@ -61,10 +62,8 @@ Python 3 · standard library only (`csv`, `statistics`, `argparse`, `json`, `col
 ## Roadmap
 - [x] Optional JSON output (`--json`)
 - [x] Most-frequent values for categorical columns
+- [x] Per-column percentiles (p25 / p75)
 - [ ] Histograms for numeric columns in the terminal
-- [ ] Per-column percentiles (p25 / p75)
 
 ---
 Built by [Ujjwal Bhatia](https://github.com/ujjwalbhatiaa) · BSc Honours Computing Science (AI) @ University of Alberta
-# csv-insights
-A tiny, dependency-free CSV data profiler in pure Python — types, missing values, stats, and top categorical values, with JSON output.

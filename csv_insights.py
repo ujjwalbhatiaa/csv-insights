@@ -57,9 +57,9 @@ def infer_type(values: list[str]) -> str:
     return "text"
 
 
-# -------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
 # Column profile
-# -------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
 @dataclass
 class ColumnProfile:
     name: str
@@ -93,12 +93,20 @@ def profile_column(name: str, values: list[str], top: int = 3) -> ColumnProfile:
 
     if dtype in ("integer", "float") and non_empty:
         nums = [float(v) for v in non_empty]
+        if len(nums) > 1:
+            # statistics.quantiles(n=4) returns the three quartile cut points
+            # [p25, p50, p75]; we surface the 25th and 75th percentiles.
+            q25, _, q75 = statistics.quantiles(nums, n=4)
+        else:
+            q25 = q75 = nums[0]
         prof.stats = {
             "min": min(nums),
             "max": max(nums),
             "mean": statistics.fmean(nums),
             "median": statistics.median(nums),
             "stdev": statistics.pstdev(nums) if len(nums) > 1 else 0.0,
+            "p25": q25,
+            "p75": q75,
         }
     elif dtype == "text" and non_empty and top > 0:
         # Most-frequent values for categorical/text columns.
@@ -153,6 +161,7 @@ def print_report(path: str, header: list[str], data: list[list[str]],
             print(f"    min {_fmt(s['min'])}  max {_fmt(s['max'])}  "
                   f"mean {_fmt(s['mean'])}  median {_fmt(s['median'])}  "
                   f"std {_fmt(s['stdev'])}")
+            print(f"    p25 {_fmt(s['p25'])}  p75 {_fmt(s['p75'])}")
         if p.top_values:
             top_str = "  ".join(
                 f"{tv['value']!r}×{tv['count']}" for tv in p.top_values
@@ -177,7 +186,7 @@ def build_json(path: str, header: list[str], data: list[list[str]],
     }
 
 
-# -------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:

@@ -30,6 +30,19 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(prof.stats["max"], 30.0)
         self.assertEqual(prof.stats["mean"], 20.0)
 
+    def test_percentiles_present_and_ordered(self):
+        prof = ci.profile_column("v", ["1", "2", "3", "4", "5"])
+        self.assertIn("p25", prof.stats)
+        self.assertIn("p75", prof.stats)
+        # p25 <= median <= p75 should always hold for numeric data
+        self.assertLessEqual(prof.stats["p25"], prof.stats["median"])
+        self.assertLessEqual(prof.stats["median"], prof.stats["p75"])
+
+    def test_percentiles_single_value(self):
+        prof = ci.profile_column("v", ["42"])
+        self.assertEqual(prof.stats["p25"], 42.0)
+        self.assertEqual(prof.stats["p75"], 42.0)
+
     def test_top_values_for_text(self):
         prof = ci.profile_column("city", ["A", "A", "B", "C"], top=2)
         self.assertEqual(prof.top_values[0], {"value": "A", "count": 2})

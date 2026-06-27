@@ -1,0 +1,5 @@
+name,age,score,city
+Alice,23,88.5,Edmonton
+Bob,31,92.0,Calgary
+Cara,,75.5,Edmonton
+Dan,28,,Toronto
