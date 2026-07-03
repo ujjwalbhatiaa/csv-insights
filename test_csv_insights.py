@@ -53,6 +53,29 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(prof.top_values, [])
 
 
+class HistogramTests(unittest.TestCase):
+    def test_counts_sum_to_n_and_bins_respected(self):
+        nums = [float(i) for i in range(1, 101)]  # 1..100
+        hist = ci.build_histogram(nums, bins=8)
+        self.assertEqual(len(hist), 8)
+        self.assertEqual(sum(b["count"] for b in hist), 100)
+        # max value must land in the last bin, not overflow
+        self.assertGreater(hist[-1]["count"], 0)
+
+    def test_identical_values_single_bin(self):
+        hist = ci.build_histogram([7.0, 7.0, 7.0], bins=8)
+        self.assertEqual(len(hist), 1)
+        self.assertEqual(hist[0]["count"], 3)
+        self.assertEqual(hist[0]["lo"], hist[0]["hi"])
+
+    def test_profile_histogram_opt_in(self):
+        values = ["1", "2", "3", "4"]
+        self.assertEqual(ci.profile_column("v", values).histogram, [])
+        prof = ci.profile_column("v", values, bins=4)
+        self.assertEqual(len(prof.histogram), 4)
+        self.assertEqual(sum(b["count"] for b in prof.histogram), 4)
+
+
 class RaggedRowTests(unittest.TestCase):
     def test_short_rows_are_padded(self):
         header = ["a", "b", "c"]

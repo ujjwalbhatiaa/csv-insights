@@ -13,6 +13,7 @@ Usage:
     python csv_insights.py data.csv
     python csv_insights.py data.csv --top 5      # show 5 top values per text column
     python csv_insights.py data.csv --json       # emit machine-readable JSON
+    python csv_insights.py data.csv --hist       # terminal histograms for numeric columns
 """
 
 from __future__ import annotations
@@ -58,6 +59,32 @@ def infer_type(values: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Histogram
+# --------------------------------------------------------------------------- #
+def build_histogram(nums: list[float], bins: int = 8) -> list[dict]:
+    """Bucket numeric values into equal-width bins.
+
+    Returns a list of {"lo": float, "hi": float, "count": int} dicts.
+    If every value is identical, a single bin holding all values is returned.
+    """
+    if not nums or bins < 1:
+        return []
+    lo, hi = min(nums), max(nums)
+    if lo == hi:
+        return [{"lo": lo, "hi": hi, "count": len(nums)}]
+    width = (hi - lo) / bins
+    counts = [0] * bins
+    for v in nums:
+        # The maximum value lands in the last bin instead of overflowing.
+        idx = min(int((v - lo) / width), bins - 1)
+        counts[idx] += 1
+    return [
+        {"lo": lo + i * width, "hi": lo + (i + 1) * width, "count": counts[i]}
+        for i in range(bins)
+    ]
+
+
+# --------------------------------------------------------------------------- #
 # Column profile
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -69,6 +96,7 @@ class ColumnProfile:
     unique: int = 0
     stats: dict = field(default_factory=dict)
     top_values: list = field(default_factory=list)
+    histogram: list = field(default_factory=list)
 
     @property
     def fill_rate(self) -> float:
@@ -77,7 +105,8 @@ class ColumnProfile:
         return 100.0 * (self.total - self.missing) / self.total
 
 
-def profile_column(name: str, values: list[str], top: int = 3) -> ColumnProfile:
+def profile_column(name: str, values: list[str], top: int = 3,
+                   bins: int = 0) -> ColumnProfile:
     total = len(values)
     missing = sum(1 for v in values if v.strip() == "")
     non_empty = [v for v in values if v.strip() != ""]
@@ -108,6 +137,8 @@ def profile_column(name: str, values: list[str], top: int = 3) -> ColumnProfile:
             "p25": q25,
             "p75": q75,
         }
+        if bins > 0:
+            prof.histogram = build_histogram(nums, bins=bins)
     elif dtype == "text" and non_empty and top > 0:
         # Most-frequent values for categorical/text columns.
         prof.top_values = [
@@ -132,11 +163,11 @@ def read_csv(path: str) -> tuple[list[str], list[list[str]]]:
 
 
 def build_profiles(header: list[str], data: list[list[str]],
-                   top: int = 3) -> list[ColumnProfile]:
+                   top: int = 3, bins: int = 0) -> list[ColumnProfile]:
     profiles = []
     for i, name in enumerate(header):
         column = [row[i] if i < len(row) else "" for row in data]
-        profiles.append(profile_column(name, column, top=top))
+        profiles.append(profile_column(name, column, top=top, bins=bins))
     return profiles
 
 
@@ -162,6 +193,15 @@ def print_report(path: str, header: list[str], data: list[list[str]],
                   f"mean {_fmt(s['mean'])}  median {_fmt(s['median'])}  "
                   f"std {_fmt(s['stdev'])}")
             print(f"    p25 {_fmt(s['p25'])}  p75 {_fmt(s['p75'])}")
+        if p.histogram:
+            max_count = max(b["count"] for b in p.histogram) or 1
+            label_w = max(
+                len(f"{_fmt(b['lo'])} – {_fmt(b['hi'])}") for b in p.histogram
+            )
+            for b in p.histogram:
+                bar = "█" * round(24 * b["count"] / max_count)
+                label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
+                print(f"      {label} | {bar} {b['count']}")
         if p.top_values:
             top_str = "  ".join(
                 f"{tv['value']!r}×{tv['count']}" for tv in p.top_values
@@ -202,6 +242,11 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true",
         help="Emit the profile as JSON instead of a text report",
     )
+    parser.add_argument(
+        "--hist", nargs="?", type=int, const=8, default=0, metavar="BINS",
+        help="Show a terminal histogram for each numeric column "
+             "(optionally set the number of bins; default: 8)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -213,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    profiles = build_profiles(header, data, top=args.top)
+    profiles = build_profiles(header, data, top=args.top, bins=args.hist)
 
     if args.json:
         print(json.dumps(build_json(args.path, header, data, profiles), indent=2))

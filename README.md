@@ -12,7 +12,23 @@ When you get a new dataset, the first thing you want is a quick feel for it: wha
 python csv_insights.py data.csv              # text report
 python csv_insights.py data.csv --top 5      # show top 5 values per text column
 python csv_insights.py data.csv --json       # machine-readable JSON output
+python csv_insights.py data.csv --hist       # terminal histograms (8 bins)
+python csv_insights.py data.csv --hist 12    # ...or pick the bin count
 ```
+
+### Histograms
+`--hist` draws an equal-width histogram under every numeric column, right in the terminal (`python csv_insights.py sample.csv --hist 4`):
+```text
+  age  [integer]
+    fill:  75.0%   missing: 1   unique: 3
+    min 23.00  max 31.00  mean 27.33  median 28.00  std 3.30
+    p25 23.00  p75 31.00
+      23.00 – 25.00 | ████████████████████████ 1
+      25.00 – 27.00 |  0
+      27.00 – 29.00 | ████████████████████████ 1
+      29.00 – 31.00 | ████████████████████████ 1
+```
+Histogram data is included in `--json` output too (a `histogram` array of `{lo, hi, count}` bins per numeric column).
 
 ## Example
 ```text
@@ -63,7 +79,7 @@ Python 3 · standard library only (`csv`, `statistics`, `argparse`, `json`, `col
 - [x] Optional JSON output (`--json`)
 - [x] Most-frequent values for categorical columns
 - [x] Per-column percentiles (p25 / p75)
-- [ ] Histograms for numeric columns in the terminal
+- [x] Histograms for numeric columns in the terminal (`--hist`)
 
 ---
 Built by [Ujjwal Bhatia](https://github.com/ujjwalbhatiaa) · BSc Honours Computing Science (AI) @ University of Alberta
