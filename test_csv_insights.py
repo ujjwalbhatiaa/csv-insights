@@ -16,7 +16,7 @@ class TypeInferenceTests(unittest.TestCase):
         self.assertEqual(ci.infer_type(["a", "b", "1"]), "text")
 
     def test_empty_column(self):
-        self.assertEqual(ci.infer_type(["", "  ", ""]), "empty")
+        self.assertEqual(ci.infer_type(["", " ", ""]), "empty")
 
 
 class ProfileTests(unittest.TestCase):
@@ -74,6 +74,38 @@ class HistogramTests(unittest.TestCase):
         prof = ci.profile_column("v", values, bins=4)
         self.assertEqual(len(prof.histogram), 4)
         self.assertEqual(sum(b["count"] for b in prof.histogram), 4)
+
+
+class OutlierTests(unittest.TestCase):
+    def test_obvious_high_outlier_flagged(self):
+        # 1..9 are tightly clustered; 1000 should trip the Tukey fence.
+        nums = [float(i) for i in range(1, 10)] + [1000.0]
+        prof = ci.profile_column("v", [str(n) for n in nums])
+        self.assertIn(1000.0, prof.outliers)
+        self.assertEqual(len(prof.outliers), 1)
+
+    def test_no_outliers_in_uniform_data(self):
+        prof = ci.profile_column("v", ["1", "2", "3", "4", "5"])
+        self.assertEqual(prof.outliers, [])
+
+    def test_zero_iqr_reports_no_outliers(self):
+        # Mostly-identical values collapse p25 == p75, so IQR == 0;
+        # find_outliers should treat this as "nothing to flag" rather
+        # than dividing by zero or flagging everything.
+        nums = [5.0, 5.0, 5.0, 5.0, 100.0]
+        outliers = ci.find_outliers(nums, q25=5.0, q75=5.0)
+        self.assertEqual(outliers, [])
+
+    def test_single_value_column_has_no_outliers(self):
+        prof = ci.profile_column("v", ["42"])
+        self.assertEqual(prof.outliers, [])
+
+    def test_json_includes_outlier_count(self):
+        header = ["v"]
+        data = [[str(n)] for n in list(range(1, 10)) + [1000]]
+        profiles = ci.build_profiles(header, data)
+        payload = ci.build_json("data.csv", header, data, profiles)
+        self.assertEqual(payload["profiles"][0]["outlier_count"], 1)
 
 
 class RaggedRowTests(unittest.TestCase):

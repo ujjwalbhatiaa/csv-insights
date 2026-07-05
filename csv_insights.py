@@ -11,9 +11,9 @@ Pure Python standard library — no pandas, no installs.
 
 Usage:
     python csv_insights.py data.csv
-    python csv_insights.py data.csv --top 5      # show 5 top values per text column
-    python csv_insights.py data.csv --json       # emit machine-readable JSON
-    python csv_insights.py data.csv --hist       # terminal histograms for numeric columns
+    python csv_insights.py data.csv --top 5     # show 5 top values per text column
+    python csv_insights.py data.csv --json      # emit machine-readable JSON
+    python csv_insights.py data.csv --hist      # terminal histograms for numeric columns
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ import statistics
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-
 
 # --------------------------------------------------------------------------- #
 # Type inference helpers
@@ -85,6 +84,25 @@ def build_histogram(nums: list[float], bins: int = 8) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Outlier detection (Tukey / IQR fences)
+# --------------------------------------------------------------------------- #
+def find_outliers(nums: list[float], q25: float, q75: float) -> list[float]:
+    """Flag values outside the classic Tukey IQR fences.
+
+    A value is an outlier if it falls below q25 - 1.5*IQR or above
+    q75 + 1.5*IQR, where IQR = q75 - q25. This is the same rule used by
+    box-plot whiskers, so it lines up with how most people already read
+    "outlier" visually. Returns the flagged values in original order.
+    """
+    iqr = q75 - q25
+    if iqr == 0:
+        return []
+    lower_fence = q25 - 1.5 * iqr
+    upper_fence = q75 + 1.5 * iqr
+    return [v for v in nums if v < lower_fence or v > upper_fence]
+
+
+# --------------------------------------------------------------------------- #
 # Column profile
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -97,6 +115,7 @@ class ColumnProfile:
     stats: dict = field(default_factory=dict)
     top_values: list = field(default_factory=list)
     histogram: list = field(default_factory=list)
+    outliers: list = field(default_factory=list)
 
     @property
     def fill_rate(self) -> float:
@@ -106,7 +125,7 @@ class ColumnProfile:
 
 
 def profile_column(name: str, values: list[str], top: int = 3,
-                   bins: int = 0) -> ColumnProfile:
+                    bins: int = 0) -> ColumnProfile:
     total = len(values)
     missing = sum(1 for v in values if v.strip() == "")
     non_empty = [v for v in values if v.strip() != ""]
@@ -137,6 +156,8 @@ def profile_column(name: str, values: list[str], top: int = 3,
             "p25": q25,
             "p75": q75,
         }
+        if len(nums) > 1:
+            prof.outliers = sorted(find_outliers(nums, q25, q75))
         if bins > 0:
             prof.histogram = build_histogram(nums, bins=bins)
     elif dtype == "text" and non_empty and top > 0:
@@ -163,7 +184,7 @@ def read_csv(path: str) -> tuple[list[str], list[list[str]]]:
 
 
 def build_profiles(header: list[str], data: list[list[str]],
-                   top: int = 3, bins: int = 0) -> list[ColumnProfile]:
+                    top: int = 3, bins: int = 0) -> list[ColumnProfile]:
     profiles = []
     for i, name in enumerate(header):
         column = [row[i] if i < len(row) else "" for row in data]
@@ -176,23 +197,27 @@ def _fmt(n: float) -> str:
 
 
 def print_report(path: str, header: list[str], data: list[list[str]],
-                 profiles: list[ColumnProfile]) -> None:
+                  profiles: list[ColumnProfile]) -> None:
     line = "=" * 64
     print(line)
-    print(f"  csv-insights  ·  {path}")
+    print(f" csv-insights · {path}")
     print(line)
-    print(f"  Rows: {len(data):,}    Columns: {len(header)}")
+    print(f" Rows: {len(data):,}   Columns: {len(header)}")
     print(line)
 
     for p in profiles:
-        print(f"\n  {p.name}  [{p.dtype}]")
+        print(f"\n  {p.name} [{p.dtype}]")
         print(f"    fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
         if p.stats:
             s = p.stats
-            print(f"    min {_fmt(s['min'])}  max {_fmt(s['max'])}  "
-                  f"mean {_fmt(s['mean'])}  median {_fmt(s['median'])}  "
+            print(f"    min {_fmt(s['min'])}   max {_fmt(s['max'])}   "
+                  f"mean {_fmt(s['mean'])}   median {_fmt(s['median'])}   "
                   f"std {_fmt(s['stdev'])}")
-            print(f"    p25 {_fmt(s['p25'])}  p75 {_fmt(s['p75'])}")
+            print(f"    p25 {_fmt(s['p25'])}   p75 {_fmt(s['p75'])}")
+            if p.outliers:
+                sample = ", ".join(_fmt(v) for v in p.outliers[:5])
+                more = f" (+{len(p.outliers) - 5} more)" if len(p.outliers) > 5 else ""
+                print(f"    outliers: {len(p.outliers)}  [{sample}{more}]")
         if p.histogram:
             max_count = max(b["count"] for b in p.histogram) or 1
             label_w = max(
@@ -201,9 +226,9 @@ def print_report(path: str, header: list[str], data: list[list[str]],
             for b in p.histogram:
                 bar = "█" * round(24 * b["count"] / max_count)
                 label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
-                print(f"      {label} | {bar} {b['count']}")
+                print(f"    {label} | {bar} {b['count']}")
         if p.top_values:
-            top_str = "  ".join(
+            top_str = " ".join(
                 f"{tv['value']!r}×{tv['count']}" for tv in p.top_values
             )
             print(f"    top: {top_str}")
@@ -217,6 +242,7 @@ def build_json(path: str, header: list[str], data: list[list[str]],
     for p in profiles:
         col = asdict(p)
         col["fill_rate"] = round(p.fill_rate, 2)
+        col["outlier_count"] = len(p.outliers)
         columns.append(col)
     return {
         "file": path,
