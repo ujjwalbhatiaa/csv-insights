@@ -117,5 +117,44 @@ class RaggedRowTests(unittest.TestCase):
         self.assertEqual(profiles[2].missing, 1)
 
 
+class DuplicateRowTests(unittest.TestCase):
+    def test_no_duplicates_in_unique_data(self):
+        data = [["1", "a"], ["2", "b"], ["3", "c"]]
+        result = ci.find_duplicate_rows(data)
+        self.assertEqual(result["duplicate_row_count"], 0)
+        self.assertEqual(result["duplicate_groups"], 0)
+        self.assertEqual(result["first_duplicate_indices"], [])
+
+    def test_single_repeated_row_counted_once_per_extra_occurrence(self):
+        # Row ["1", "a"] appears 3 times total -> 2 extra occurrences.
+        data = [["1", "a"], ["2", "b"], ["1", "a"], ["1", "a"]]
+        result = ci.find_duplicate_rows(data)
+        self.assertEqual(result["duplicate_row_count"], 2)
+        self.assertEqual(result["duplicate_groups"], 1)
+        self.assertEqual(result["first_duplicate_indices"], [2, 3])
+
+    def test_multiple_distinct_duplicate_groups(self):
+        data = [["1", "a"], ["1", "a"], ["2", "b"], ["2", "b"], ["3", "c"]]
+        result = ci.find_duplicate_rows(data)
+        self.assertEqual(result["duplicate_row_count"], 2)
+        self.assertEqual(result["duplicate_groups"], 2)
+
+    def test_first_duplicate_indices_capped_at_five(self):
+        # 7 identical rows -> 6 duplicate occurrences, but the index list
+        # should be capped at 5 entries for readability.
+        data = [["x"]] * 7
+        result = ci.find_duplicate_rows(data)
+        self.assertEqual(result["duplicate_row_count"], 6)
+        self.assertEqual(len(result["first_duplicate_indices"]), 5)
+
+    def test_json_output_includes_duplicates_summary(self):
+        header = ["a"]
+        data = [["1"], ["1"], ["2"]]
+        profiles = ci.build_profiles(header, data)
+        payload = ci.build_json("data.csv", header, data, profiles)
+        self.assertIn("duplicates", payload)
+        self.assertEqual(payload["duplicates"]["duplicate_row_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
