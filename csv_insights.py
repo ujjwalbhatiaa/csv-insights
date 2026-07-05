@@ -4,16 +4,16 @@ csv-insights — a tiny, dependency-free CSV data profiler.
 
 Point it at any CSV and it prints a clean summary: row/column counts,
 inferred column types, missing values, unique counts, descriptive
-statistics for numeric columns (min, max, mean, median, std dev), and
-the most-frequent values for text columns.
+statistics for numeric columns (min, max, mean, median, std dev), the
+most-frequent values for text columns, and exact duplicate-row detection.
 
 Pure Python standard library — no pandas, no installs.
 
 Usage:
     python csv_insights.py data.csv
     python csv_insights.py data.csv --top 5     # show 5 top values per text column
-    python csv_insights.py data.csv --json      # emit machine-readable JSON
-    python csv_insights.py data.csv --hist      # terminal histograms for numeric columns
+    python csv_insights.py data.csv --json       # emit machine-readable JSON
+    python csv_insights.py data.csv --hist        # terminal histograms for numeric columns
 """
 
 from __future__ import annotations
@@ -100,6 +100,39 @@ def find_outliers(nums: list[float], q25: float, q75: float) -> list[float]:
     lower_fence = q25 - 1.5 * iqr
     upper_fence = q75 + 1.5 * iqr
     return [v for v in nums if v < lower_fence or v > upper_fence]
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate row detection
+# --------------------------------------------------------------------------- #
+def find_duplicate_rows(data: list[list[str]]) -> dict:
+    """Detect exact duplicate rows (rows that are byte-for-byte identical).
+
+    Returns a dict with:
+      - "duplicate_row_count": number of *extra* occurrences beyond the
+        first time each row is seen (i.e. how many rows you'd delete to
+        make every row unique).
+      - "duplicate_groups": number of distinct row values that occur
+        more than once.
+      - "first_duplicate_indices": the 0-indexed row numbers (relative to
+        the data, not counting the header) of the first few rows that
+        turned out to be repeats, capped at 5 for readability.
+    """
+    seen: Counter = Counter()
+    duplicate_indices: list[int] = []
+    for i, row in enumerate(data):
+        key = tuple(row)
+        seen[key] += 1
+        if seen[key] > 1:
+            duplicate_indices.append(i)
+
+    duplicate_groups = sum(1 for count in seen.values() if count > 1)
+
+    return {
+        "duplicate_row_count": len(duplicate_indices),
+        "duplicate_groups": duplicate_groups,
+        "first_duplicate_indices": duplicate_indices[:5],
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -199,39 +232,47 @@ def _fmt(n: float) -> str:
 def print_report(path: str, header: list[str], data: list[list[str]],
                   profiles: list[ColumnProfile]) -> None:
     line = "=" * 64
+    dupes = find_duplicate_rows(data)
+
     print(line)
     print(f" csv-insights · {path}")
     print(line)
     print(f" Rows: {len(data):,}   Columns: {len(header)}")
+    if dupes["duplicate_row_count"]:
+        print(f" Duplicate rows: {dupes['duplicate_row_count']} "
+              f"(across {dupes['duplicate_groups']} repeated value"
+              f"{'s' if dupes['duplicate_groups'] != 1 else ''})")
+    else:
+        print(" Duplicate rows: 0")
     print(line)
 
     for p in profiles:
-        print(f"\n  {p.name} [{p.dtype}]")
-        print(f"    fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
+        print(f"\n {p.name} [{p.dtype}]")
+        print(f"   fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
         if p.stats:
             s = p.stats
-            print(f"    min {_fmt(s['min'])}   max {_fmt(s['max'])}   "
+            print(f"   min {_fmt(s['min'])}   max {_fmt(s['max'])}   "
                   f"mean {_fmt(s['mean'])}   median {_fmt(s['median'])}   "
                   f"std {_fmt(s['stdev'])}")
-            print(f"    p25 {_fmt(s['p25'])}   p75 {_fmt(s['p75'])}")
+            print(f"   p25 {_fmt(s['p25'])}   p75 {_fmt(s['p75'])}")
             if p.outliers:
                 sample = ", ".join(_fmt(v) for v in p.outliers[:5])
                 more = f" (+{len(p.outliers) - 5} more)" if len(p.outliers) > 5 else ""
-                print(f"    outliers: {len(p.outliers)}  [{sample}{more}]")
-        if p.histogram:
-            max_count = max(b["count"] for b in p.histogram) or 1
-            label_w = max(
-                len(f"{_fmt(b['lo'])} – {_fmt(b['hi'])}") for b in p.histogram
-            )
-            for b in p.histogram:
-                bar = "█" * round(24 * b["count"] / max_count)
-                label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
-                print(f"    {label} | {bar} {b['count']}")
+                print(f"   outliers: {len(p.outliers)} [{sample}{more}]")
+            if p.histogram:
+                max_count = max(b["count"] for b in p.histogram) or 1
+                label_w = max(
+                    len(f"{_fmt(b['lo'])} – {_fmt(b['hi'])}") for b in p.histogram
+                )
+                for b in p.histogram:
+                    bar = "█" * round(24 * b["count"] / max_count)
+                    label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
+                    print(f"   {label} | {bar} {b['count']}")
         if p.top_values:
             top_str = " ".join(
                 f"{tv['value']!r}×{tv['count']}" for tv in p.top_values
             )
-            print(f"    top: {top_str}")
+            print(f"   top: {top_str}")
     print("\n" + line)
 
 
@@ -248,6 +289,7 @@ def build_json(path: str, header: list[str], data: list[list[str]],
         "file": path,
         "rows": len(data),
         "columns": len(header),
+        "duplicates": find_duplicate_rows(data),
         "profiles": columns,
     }
 
