@@ -156,5 +156,76 @@ class DuplicateRowTests(unittest.TestCase):
         self.assertEqual(payload["duplicates"]["duplicate_row_count"], 1)
 
 
+class CorrelationTests(unittest.TestCase):
+    def test_perfect_positive_correlation(self):
+        x = [1.0, 2.0, 3.0, 4.0]
+        y = [2.0, 4.0, 6.0, 8.0]
+        self.assertAlmostEqual(ci.pearson_correlation(x, y), 1.0)
+
+    def test_perfect_negative_correlation(self):
+        x = [1.0, 2.0, 3.0, 4.0]
+        y = [8.0, 6.0, 4.0, 2.0]
+        self.assertAlmostEqual(ci.pearson_correlation(x, y), -1.0)
+
+    def test_constant_column_returns_none(self):
+        # Zero variance means correlation is undefined, not zero.
+        x = [5.0, 5.0, 5.0]
+        y = [1.0, 2.0, 3.0]
+        self.assertIsNone(ci.pearson_correlation(x, y))
+
+    def test_too_few_points_returns_none(self):
+        self.assertIsNone(ci.pearson_correlation([1.0], [1.0]))
+
+    def test_mismatched_lengths_return_none(self):
+        self.assertIsNone(ci.pearson_correlation([1.0, 2.0], [1.0]))
+
+    def test_build_correlations_pairs_numeric_columns_only(self):
+        header = ["a", "b", "city"]
+        data = [
+            ["1", "2", "X"],
+            ["2", "4", "Y"],
+            ["3", "6", "Z"],
+            ["4", "8", "X"],
+        ]
+        profiles = ci.build_profiles(header, data)
+        corrs = ci.build_correlations(header, data, profiles)
+        # Only one numeric pair exists (a, b); the text column is excluded.
+        self.assertEqual(len(corrs), 1)
+        self.assertEqual({corrs[0]["a"], corrs[0]["b"]}, {"a", "b"})
+        self.assertAlmostEqual(corrs[0]["r"], 1.0)
+
+    def test_build_correlations_sorted_by_strength(self):
+        header = ["a", "b", "c"]
+        data = [
+            ["1", "2", "9"],
+            ["2", "4", "1"],
+            ["3", "5", "8"],
+            ["4", "9", "2"],
+        ]
+        profiles = ci.build_profiles(header, data)
+        corrs = ci.build_correlations(header, data, profiles)
+        self.assertEqual(len(corrs), 3)  # 3 numeric columns -> 3 pairs
+        abs_rs = [abs(c["r"]) for c in corrs]
+        self.assertEqual(abs_rs, sorted(abs_rs, reverse=True))
+
+    def test_build_correlations_skips_pairwise_missing_values(self):
+        header = ["a", "b"]
+        data = [["1", "2"], ["2", ""], ["3", "6"], ["4", "8"]]
+        profiles = ci.build_profiles(header, data)
+        corrs = ci.build_correlations(header, data, profiles)
+        # The row with a missing "b" value is dropped only for this pair;
+        # the remaining 3 rows are still a perfect line.
+        self.assertEqual(len(corrs), 1)
+        self.assertAlmostEqual(corrs[0]["r"], 1.0)
+
+    def test_json_includes_correlations(self):
+        header = ["a", "b"]
+        data = [["1", "2"], ["2", "4"], ["3", "6"]]
+        profiles = ci.build_profiles(header, data)
+        payload = ci.build_json("data.csv", header, data, profiles)
+        self.assertIn("correlations", payload)
+        self.assertEqual(len(payload["correlations"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

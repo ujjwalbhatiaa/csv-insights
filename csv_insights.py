@@ -5,26 +5,29 @@ csv-insights — a tiny, dependency-free CSV data profiler.
 Point it at any CSV and it prints a clean summary: row/column counts,
 inferred column types, missing values, unique counts, descriptive
 statistics for numeric columns (min, max, mean, median, std dev), the
-most-frequent values for text columns, and exact duplicate-row detection.
+most-frequent values for text columns, pairwise correlation between
+numeric columns, and exact duplicate-row detection.
 
 Pure Python standard library — no pandas, no installs.
 
 Usage:
-    python csv_insights.py data.csv
-    python csv_insights.py data.csv --top 5     # show 5 top values per text column
-    python csv_insights.py data.csv --json       # emit machine-readable JSON
-    python csv_insights.py data.csv --hist        # terminal histograms for numeric columns
+python csv_insights.py data.csv
+python csv_insights.py data.csv --top 5 # show 5 top values per text column
+python csv_insights.py data.csv --json # emit machine-readable JSON
+python csv_insights.py data.csv --hist # terminal histograms for numeric columns
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import json
 import statistics
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+
 
 # --------------------------------------------------------------------------- #
 # Type inference helpers
@@ -109,14 +112,14 @@ def find_duplicate_rows(data: list[list[str]]) -> dict:
     """Detect exact duplicate rows (rows that are byte-for-byte identical).
 
     Returns a dict with:
-      - "duplicate_row_count": number of *extra* occurrences beyond the
-        first time each row is seen (i.e. how many rows you'd delete to
-        make every row unique).
-      - "duplicate_groups": number of distinct row values that occur
-        more than once.
-      - "first_duplicate_indices": the 0-indexed row numbers (relative to
-        the data, not counting the header) of the first few rows that
-        turned out to be repeats, capped at 5 for readability.
+    - "duplicate_row_count": number of *extra* occurrences beyond the
+      first time each row is seen (i.e. how many rows you'd delete to
+      make every row unique).
+    - "duplicate_groups": number of distinct row values that occur
+      more than once.
+    - "first_duplicate_indices": the 0-indexed row numbers (relative to
+      the data, not counting the header) of the first few rows that
+      turned out to be repeats, capped at 5 for readability.
     """
     seen: Counter = Counter()
     duplicate_indices: list[int] = []
@@ -133,6 +136,67 @@ def find_duplicate_rows(data: list[list[str]]) -> dict:
         "duplicate_groups": duplicate_groups,
         "first_duplicate_indices": duplicate_indices[:5],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Correlation (numeric columns)
+# --------------------------------------------------------------------------- #
+def pearson_correlation(x: list[float], y: list[float]) -> float | None:
+    """Compute the Pearson correlation coefficient between two equal-length
+    numeric sequences.
+
+    Returns None if there are fewer than 2 paired observations, the
+    sequences differ in length, or either sequence has zero variance (a
+    constant column has an undefined correlation — that's a fact worth
+    surfacing as "unknown", not silently rounding to 0 or crashing on a
+    divide-by-zero).
+    """
+    n = len(x)
+    if n < 2 or n != len(y):
+        return None
+    mean_x = statistics.fmean(x)
+    mean_y = statistics.fmean(y)
+    cov = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+    var_x = sum((xi - mean_x) ** 2 for xi in x)
+    var_y = sum((yi - mean_y) ** 2 for yi in y)
+    if var_x == 0 or var_y == 0:
+        return None
+    return cov / (var_x * var_y) ** 0.5
+
+
+def build_correlations(header: list[str], data: list[list[str]],
+                        profiles: list[ColumnProfile]) -> list[dict]:
+    """Pairwise Pearson correlation between every pair of numeric columns.
+
+    Each pair is computed using only the rows where *both* columns have a
+    non-missing numeric value (pairwise-complete, not listwise-complete —
+    a missing value in an unrelated column shouldn't throw away a usable
+    row). Returns a list of {"a": name, "b": name, "r": float} dicts sorted
+    by |r| descending. Pairs with an undefined correlation (e.g. one side
+    is a constant column) are omitted rather than reported as a fake 0.
+    """
+    numeric_idx = [
+        i for i, p in enumerate(profiles) if p.dtype in ("integer", "float")
+    ]
+    results = []
+    for a, b in itertools.combinations(numeric_idx, 2):
+        xs: list[float] = []
+        ys: list[float] = []
+        for row in data:
+            va = row[a] if a < len(row) else ""
+            vb = row[b] if b < len(row) else ""
+            if va.strip() == "" or vb.strip() == "":
+                continue
+            try:
+                xs.append(float(va))
+                ys.append(float(vb))
+            except ValueError:
+                continue
+        r = pearson_correlation(xs, ys)
+        if r is not None:
+            results.append({"a": header[a], "b": header[b], "r": round(r, 4)})
+    results.sort(key=lambda d: abs(d["r"]), reverse=True)
+    return results
 
 
 # --------------------------------------------------------------------------- #
@@ -237,7 +301,7 @@ def print_report(path: str, header: list[str], data: list[list[str]],
     print(line)
     print(f" csv-insights · {path}")
     print(line)
-    print(f" Rows: {len(data):,}   Columns: {len(header)}")
+    print(f" Rows: {len(data):,}  Columns: {len(header)}")
     if dupes["duplicate_row_count"]:
         print(f" Duplicate rows: {dupes['duplicate_row_count']} "
               f"(across {dupes['duplicate_groups']} repeated value"
@@ -248,36 +312,50 @@ def print_report(path: str, header: list[str], data: list[list[str]],
 
     for p in profiles:
         print(f"\n {p.name} [{p.dtype}]")
-        print(f"   fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
+        print(f"  fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
         if p.stats:
             s = p.stats
-            print(f"   min {_fmt(s['min'])}   max {_fmt(s['max'])}   "
-                  f"mean {_fmt(s['mean'])}   median {_fmt(s['median'])}   "
+            print(f"  min {_fmt(s['min'])}  max {_fmt(s['max'])}  "
+                  f"mean {_fmt(s['mean'])}  median {_fmt(s['median'])}  "
                   f"std {_fmt(s['stdev'])}")
-            print(f"   p25 {_fmt(s['p25'])}   p75 {_fmt(s['p75'])}")
+            print(f"  p25 {_fmt(s['p25'])}  p75 {_fmt(s['p75'])}")
             if p.outliers:
                 sample = ", ".join(_fmt(v) for v in p.outliers[:5])
                 more = f" (+{len(p.outliers) - 5} more)" if len(p.outliers) > 5 else ""
-                print(f"   outliers: {len(p.outliers)} [{sample}{more}]")
-            if p.histogram:
-                max_count = max(b["count"] for b in p.histogram) or 1
-                label_w = max(
-                    len(f"{_fmt(b['lo'])} – {_fmt(b['hi'])}") for b in p.histogram
-                )
-                for b in p.histogram:
-                    bar = "█" * round(24 * b["count"] / max_count)
-                    label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
-                    print(f"   {label} | {bar} {b['count']}")
+                print(f"  outliers: {len(p.outliers)} [{sample}{more}]")
+        if p.histogram:
+            max_count = max(b["count"] for b in p.histogram) or 1
+            label_w = max(
+                len(f"{_fmt(b['lo'])} – {_fmt(b['hi'])}") for b in p.histogram
+            )
+            for b in p.histogram:
+                bar = "█" * round(24 * b["count"] / max_count)
+                label = f"{_fmt(b['lo'])} – {_fmt(b['hi'])}".rjust(label_w)
+                print(f"  {label} | {bar} {b['count']}")
         if p.top_values:
             top_str = " ".join(
                 f"{tv['value']!r}×{tv['count']}" for tv in p.top_values
             )
-            print(f"   top: {top_str}")
+            print(f"  top: {top_str}")
+
+    correlations = build_correlations(header, data, profiles)
+    if correlations:
+        print(f"\n{line}")
+        print(" Correlations (numeric columns, strongest first)")
+        strong = [c for c in correlations if abs(c["r"]) >= 0.5]
+        shown = strong if strong else correlations[:5]
+        name_w = max(len(f"{c['a']} <-> {c['b']}") for c in shown)
+        for c in shown:
+            label = f"{c['a']} <-> {c['b']}".ljust(name_w)
+            print(f"  {label}  r = {c['r']:+.2f}")
+        if not strong:
+            print("  (none reach |r| >= 0.5 — showing the strongest available)")
+
     print("\n" + line)
 
 
 def build_json(path: str, header: list[str], data: list[list[str]],
-               profiles: list[ColumnProfile]) -> dict:
+                profiles: list[ColumnProfile]) -> dict:
     """Assemble a machine-readable summary of the profiled CSV."""
     columns = []
     for p in profiles:
@@ -290,6 +368,7 @@ def build_json(path: str, header: list[str], data: list[list[str]],
         "rows": len(data),
         "columns": len(header),
         "duplicates": find_duplicate_rows(data),
+        "correlations": build_correlations(header, data, profiles),
         "profiles": columns,
     }
 
