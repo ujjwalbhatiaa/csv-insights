@@ -6,7 +6,9 @@ Point it at any CSV and it prints a clean summary: row/column counts,
 inferred column types, missing values, unique counts, descriptive
 statistics for numeric columns (min, max, mean, median, std dev), the
 most-frequent values for text columns, pairwise correlation between
-numeric columns, and exact duplicate-row detection.
+numeric columns, and exact duplicate-row detection. The field delimiter
+(comma, semicolon, tab, pipe) is auto-detected, with an override flag
+for files that don't sniff cleanly.
 
 Pure Python standard library — no pandas, no installs.
 
@@ -15,6 +17,7 @@ python csv_insights.py data.csv
 python csv_insights.py data.csv --top 5 # show 5 top values per text column
 python csv_insights.py data.csv --json # emit machine-readable JSON
 python csv_insights.py data.csv --hist # terminal histograms for numeric columns
+python csv_insights.py data.tsv --delimiter '\t' # force a specific delimiter
 """
 
 from __future__ import annotations
@@ -270,14 +273,32 @@ def profile_column(name: str, values: list[str], top: int = 3,
 # --------------------------------------------------------------------------- #
 # Reading + reporting
 # --------------------------------------------------------------------------- #
-def read_csv(path: str) -> tuple[list[str], list[list[str]]]:
+def read_csv(path: str, delimiter: str | None = None) -> tuple[list[str], list[list[str]], str]:
+    """Read a CSV file, auto-detecting its field delimiter unless one is given.
+
+    Returns (header, data, delimiter_used). Detection is attempted with
+    csv.Sniffer against a 4KB sample, restricted to a small set of plausible
+    candidates (comma, semicolon, tab, pipe) so a stray punctuation mark
+    inside a text field can't hijack the guess. If the sniffer can't
+    confidently decide — e.g. a single-column file with no delimiter
+    anywhere — this falls back to comma rather than raising, since that
+    matches the historical (pre-detection) default behavior.
+    """
     with open(path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
+        sample = f.read(4096)
+        f.seek(0)
+        if delimiter is None:
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+                delimiter = dialect.delimiter
+            except csv.Error:
+                delimiter = ","
+        reader = csv.reader(f, delimiter=delimiter)
         rows = list(reader)
     if not rows:
         raise ValueError("CSV file is empty.")
     header, *data = rows
-    return header, data
+    return header, data, delimiter
 
 
 def build_profiles(header: list[str], data: list[list[str]],
@@ -293,15 +314,22 @@ def _fmt(n: float) -> str:
     return f"{n:.2f}" if isinstance(n, float) else str(n)
 
 
+def _fmt_delimiter(delimiter: str) -> str:
+    """Render a delimiter for display, spelling out whitespace characters
+    that would otherwise print invisibly (e.g. a literal tab)."""
+    named = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}
+    return named.get(delimiter, repr(delimiter))
+
+
 def print_report(path: str, header: list[str], data: list[list[str]],
-                  profiles: list[ColumnProfile]) -> None:
+                  profiles: list[ColumnProfile], delimiter: str = ",") -> None:
     line = "=" * 64
     dupes = find_duplicate_rows(data)
 
     print(line)
     print(f" csv-insights · {path}")
     print(line)
-    print(f" Rows: {len(data):,}  Columns: {len(header)}")
+    print(f" Rows: {len(data):,}  Columns: {len(header)}  Delimiter: {_fmt_delimiter(delimiter)}")
     if dupes["duplicate_row_count"]:
         print(f" Duplicate rows: {dupes['duplicate_row_count']} "
               f"(across {dupes['duplicate_groups']} repeated value"
@@ -355,7 +383,7 @@ def print_report(path: str, header: list[str], data: list[list[str]],
 
 
 def build_json(path: str, header: list[str], data: list[list[str]],
-                profiles: list[ColumnProfile]) -> dict:
+                profiles: list[ColumnProfile], delimiter: str = ",") -> dict:
     """Assemble a machine-readable summary of the profiled CSV."""
     columns = []
     for p in profiles:
@@ -365,6 +393,7 @@ def build_json(path: str, header: list[str], data: list[list[str]],
         columns.append(col)
     return {
         "file": path,
+        "delimiter": delimiter,
         "rows": len(data),
         "columns": len(header),
         "duplicates": find_duplicate_rows(data),
@@ -394,10 +423,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Show a terminal histogram for each numeric column "
              "(optionally set the number of bins; default: 8)",
     )
+    parser.add_argument(
+        "--delimiter", type=str, default=None, metavar="CHAR",
+        help="Force a specific field delimiter instead of auto-detecting "
+             "(e.g. ';' or '\\t' for tab-separated files)",
+    )
     args = parser.parse_args(argv)
 
+    delimiter_override = args.delimiter
+    if delimiter_override is not None:
+        # Let '\t' typed literally on the command line (backslash + t) mean
+        # an actual tab character, since typing a real tab in a shell arg
+        # is awkward. Real single characters like ';' pass through unchanged.
+        delimiter_override = delimiter_override.encode().decode("unicode_escape")
+
     try:
-        header, data = read_csv(args.path)
+        header, data, delimiter = read_csv(args.path, delimiter=delimiter_override)
     except FileNotFoundError:
         print(f"Error: file not found: {args.path}", file=sys.stderr)
         return 1
@@ -408,9 +449,9 @@ def main(argv: list[str] | None = None) -> int:
     profiles = build_profiles(header, data, top=args.top, bins=args.hist)
 
     if args.json:
-        print(json.dumps(build_json(args.path, header, data, profiles), indent=2))
+        print(json.dumps(build_json(args.path, header, data, profiles, delimiter), indent=2))
     else:
-        print_report(args.path, header, data, profiles)
+        print_report(args.path, header, data, profiles, delimiter)
     return 0
 
 

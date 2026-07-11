@@ -16,7 +16,18 @@ python csv_insights.py data.csv --top 5     # show top 5 values per text column
 python csv_insights.py data.csv --json      # machine-readable JSON output
 python csv_insights.py data.csv --hist      # terminal histograms (8 bins)
 python csv_insights.py data.csv --hist 12   # ...or pick the bin count
+python csv_insights.py data.tsv --delimiter '\t'  # force a delimiter (rarely needed — see below)
 ```
+
+## Delimiter detection
+
+The field delimiter is auto-detected on every run — comma, semicolon, tab, and pipe are all recognized, so a semicolon-separated export from a European spreadsheet or a `.tsv` file works with no extra flags:
+
+```
+Rows: 2  Columns: 2  Delimiter: semicolon
+```
+
+Detection uses `csv.Sniffer` against a sample of the file, restricted to those four candidates so a stray comma or pipe inside a text field can't hijack the guess. If the file has only one column (nothing to sniff a delimiter from), it falls back to comma rather than raising. `--delimiter` overrides detection entirely when you need to force a specific character — pass it literally (`--delimiter ';'`) or as an escape sequence for whitespace (`--delimiter '\t'`). The delimiter actually used is always shown in the report header and included in `--json` output under a top-level `delimiter` key.
 
 ## Outlier detection
 
@@ -79,7 +90,7 @@ Duplicate info is included in `--json` output too, under a top-level `duplicates
 ========================================================================
 csv-insights · sample.csv
 ========================================================================
-Rows: 4  Columns: 4
+Rows: 4  Columns: 4  Delimiter: comma
 ========================================================================
 
 name [text]
@@ -106,6 +117,7 @@ python csv_insights.py data.csv --json | jq '.profiles[] | {name, dtype, missing
 
 ## What it does
 
+- Auto-detects the field delimiter (comma, semicolon, tab, pipe), with a `--delimiter` override for anything that doesn't sniff cleanly
 - Infers each column's type (integer, float, text, empty)
 - Reports fill rate, missing count, and unique count per column
 - Computes min, max, mean, median, standard deviation, and the 25th/75th percentiles for numeric columns
@@ -126,7 +138,7 @@ The test suite uses only the standard-library `unittest` module — no dependenc
 
 ## Tech
 
-Python 3 · standard library only (`csv`, `statistics`, `itertools`, `argparse`, `json`, `collections`, `dataclasses`)
+Python 3 · standard library only (`csv`, `statistics`, `itertools`, `argparse`, `json`, `collections`, `dataclasses`, `tempfile`)
 
 ## Roadmap
 
@@ -137,6 +149,7 @@ Python 3 · standard library only (`csv`, `statistics`, `itertools`, `argparse`,
 - [x] Outlier detection for numeric columns (Tukey IQR fences)
 - [x] Exact duplicate-row detection
 - [x] Pairwise correlation between numeric columns
+- [x] Auto-detect field delimiter (comma/semicolon/tab/pipe), with `--delimiter` override
 
 ---
 

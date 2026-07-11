@@ -1,5 +1,7 @@
 """Lightweight tests for csv-insights (standard-library unittest, no deps)."""
 
+import os
+import tempfile
 import unittest
 
 import csv_insights as ci
@@ -225,6 +227,53 @@ class CorrelationTests(unittest.TestCase):
         payload = ci.build_json("data.csv", header, data, profiles)
         self.assertIn("correlations", payload)
         self.assertEqual(len(payload["correlations"]), 1)
+
+
+class DelimiterDetectionTests(unittest.TestCase):
+    def _write_temp_csv(self, text: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline="") as f:
+            f.write(text)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_comma_delimiter_autodetected(self):
+        path = self._write_temp_csv("a,b\n1,2\n3,4\n")
+        header, data, delimiter = ci.read_csv(path)
+        self.assertEqual(delimiter, ",")
+        self.assertEqual(header, ["a", "b"])
+        self.assertEqual(data, [["1", "2"], ["3", "4"]])
+
+    def test_semicolon_delimiter_autodetected(self):
+        path = self._write_temp_csv("name;age\nAlice;30\nBob;25\n")
+        header, data, delimiter = ci.read_csv(path)
+        self.assertEqual(delimiter, ";")
+        self.assertEqual(header, ["name", "age"])
+        self.assertEqual(data, [["Alice", "30"], ["Bob", "25"]])
+
+    def test_tab_delimiter_autodetected(self):
+        path = self._write_temp_csv("name\tage\nAlice\t30\nBob\t25\n")
+        header, data, delimiter = ci.read_csv(path)
+        self.assertEqual(delimiter, "\t")
+        self.assertEqual(header, ["name", "age"])
+
+    def test_explicit_delimiter_overrides_autodetection(self):
+        # File would sniff as comma-delimited on its own; force pipe instead
+        # by passing an explicit delimiter that matches how it's actually
+        # laid out.
+        path = self._write_temp_csv("a|b\n1|2\n3|4\n")
+        header, data, delimiter = ci.read_csv(path, delimiter="|")
+        self.assertEqual(delimiter, "|")
+        self.assertEqual(header, ["a", "b"])
+
+    def test_sniff_failure_falls_back_to_comma(self):
+        # A single column with no delimiter anywhere gives the Sniffer
+        # nothing to key off; this must not raise, and should fall back
+        # to the historical comma default.
+        path = self._write_temp_csv("onlycolumn\nfoo\nbar\n")
+        header, data, delimiter = ci.read_csv(path)
+        self.assertEqual(delimiter, ",")
+        self.assertEqual(header, ["onlycolumn"])
 
 
 if __name__ == "__main__":
