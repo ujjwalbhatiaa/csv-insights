@@ -6,7 +6,8 @@ Point it at any CSV and it prints a clean summary: row/column counts,
 inferred column types, missing values, unique counts, descriptive
 statistics for numeric columns (min, max, mean, median, std dev), the
 most-frequent values for text columns, pairwise correlation between
-numeric columns, and exact duplicate-row detection. The field delimiter
+numeric columns, exact duplicate-row detection, and a flag for any
+column whose value never actually varies. The field delimiter
 (comma, semicolon, tab, pipe) is auto-detected, with an override flag
 for files that don't sniff cleanly.
 
@@ -216,6 +217,8 @@ class ColumnProfile:
     top_values: list = field(default_factory=list)
     histogram: list = field(default_factory=list)
     outliers: list = field(default_factory=list)
+    is_constant: bool = False
+    constant_value: str | None = None
 
     @property
     def fill_rate(self) -> float:
@@ -238,6 +241,15 @@ def profile_column(name: str, values: list[str], top: int = 3,
         missing=missing,
         unique=len(set(non_empty)),
     )
+
+    # A column is "constant" if every non-missing value is identical. This is
+    # worth flagging on its own: it silently breaks correlation (a constant
+    # numeric column has undefined variance) and it's an easy thing to miss
+    # by eye in a wide dataset — a column that never actually varies is
+    # either dead weight or a data-collection bug.
+    if non_empty and len(set(non_empty)) == 1:
+        prof.is_constant = True
+        prof.constant_value = non_empty[0]
 
     if dtype in ("integer", "float") and non_empty:
         nums = [float(v) for v in non_empty]
@@ -341,6 +353,8 @@ def print_report(path: str, header: list[str], data: list[list[str]],
     for p in profiles:
         print(f"\n {p.name} [{p.dtype}]")
         print(f"  fill: {p.fill_rate:5.1f}%   missing: {p.missing}   unique: {p.unique}")
+        if p.is_constant:
+            print(f"  ⚠ constant column — every value is {p.constant_value!r}")
         if p.stats:
             s = p.stats
             print(f"  min {_fmt(s['min'])}  max {_fmt(s['max'])}  "

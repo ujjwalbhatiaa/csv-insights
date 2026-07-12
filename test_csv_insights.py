@@ -110,6 +110,48 @@ class OutlierTests(unittest.TestCase):
         self.assertEqual(payload["profiles"][0]["outlier_count"], 1)
 
 
+class ConstantColumnTests(unittest.TestCase):
+    def test_numeric_constant_column_flagged(self):
+        prof = ci.profile_column("country_code", ["1", "1", "1", "1"])
+        self.assertTrue(prof.is_constant)
+        self.assertEqual(prof.constant_value, "1")
+
+    def test_text_constant_column_flagged(self):
+        prof = ci.profile_column("country", ["Canada", "Canada", "Canada"])
+        self.assertTrue(prof.is_constant)
+        self.assertEqual(prof.constant_value, "Canada")
+
+    def test_varying_column_not_flagged(self):
+        prof = ci.profile_column("age", ["23", "31", "28"])
+        self.assertFalse(prof.is_constant)
+        self.assertIsNone(prof.constant_value)
+
+    def test_missing_values_ignored_when_checking_constant(self):
+        # A column that is constant everywhere it *has* a value should
+        # still be flagged, even if some rows are missing.
+        prof = ci.profile_column("country", ["Canada", "", "Canada", "Canada"])
+        self.assertTrue(prof.is_constant)
+        self.assertEqual(prof.constant_value, "Canada")
+
+    def test_all_missing_column_not_flagged_constant(self):
+        # An entirely empty column is "empty", not meaningfully constant.
+        prof = ci.profile_column("v", ["", "", ""])
+        self.assertFalse(prof.is_constant)
+
+    def test_single_row_column_is_constant(self):
+        prof = ci.profile_column("v", ["42"])
+        self.assertTrue(prof.is_constant)
+        self.assertEqual(prof.constant_value, "42")
+
+    def test_json_includes_constant_flag(self):
+        header = ["country"]
+        data = [["Canada"], ["Canada"], ["Canada"]]
+        profiles = ci.build_profiles(header, data)
+        payload = ci.build_json("data.csv", header, data, profiles)
+        self.assertTrue(payload["profiles"][0]["is_constant"])
+        self.assertEqual(payload["profiles"][0]["constant_value"], "Canada")
+
+
 class RaggedRowTests(unittest.TestCase):
     def test_short_rows_are_padded(self):
         header = ["a", "b", "c"]

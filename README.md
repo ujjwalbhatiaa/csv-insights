@@ -54,7 +54,20 @@ Every run also computes the pairwise Pearson correlation between every pair of n
 ================================================================
 ```
 
-Pairs where `|r| >= 0.5` print by default; if nothing reaches that bar, the strongest few pairs print anyway so the section is never silently empty. A constant column (zero variance) has an undefined correlation and is correctly omitted rather than reported as a fake 0. The full pairwise matrix is included in `--json` output under a top-level `correlations` array of `{a, b, r}` objects.
+Pairs where `|r| >= 0.5` print by default; if nothing reaches that bar, the strongest few pairs print anyway so the section is never silently empty. A constant column (zero variance) has an undefined correlation and is correctly omitted rather than reported as a fake 0 — see below for how constant columns are flagged directly. The full pairwise matrix is included in `--json` output under a top-level `correlations` array of `{a, b, r}` objects.
+
+## Constant columns
+
+A column where every non-missing value is identical is flagged explicitly, since it's easy to miss by eye in a wide dataset and it's exactly the case that makes correlation undefined:
+
+```
+country [text]
+  fill: 100.0%   missing: 0   unique: 1
+  ⚠ constant column — every value is 'Canada'
+  top: 'Canada'×3
+```
+
+This works for numeric columns too (a `region_id` column that's always `7`, for example) — detection only looks at non-missing values, so a column that's constant everywhere it has data is still flagged even with some missing rows. Included in `--json` output as a top-level-per-column `is_constant` boolean and `constant_value`.
 
 ## Histograms
 
@@ -125,6 +138,7 @@ python csv_insights.py data.csv --json | jq '.profiles[] | {name, dtype, missing
 - Computes pairwise Pearson correlation between every pair of numeric columns (pairwise-complete, undefined pairs omitted)
 - Lists the most-frequent values for text/categorical columns (`--top N`)
 - Detects exact duplicate rows and reports how many extra copies to remove
+- Flags constant columns (every non-missing value identical) — the case that breaks correlation and is easy to miss by eye
 - Emits a machine-readable JSON summary with `--json`
 - Handles ragged rows and UTF-8 BOM gracefully
 
@@ -150,6 +164,7 @@ Python 3 · standard library only (`csv`, `statistics`, `itertools`, `argparse`,
 - [x] Exact duplicate-row detection
 - [x] Pairwise correlation between numeric columns
 - [x] Auto-detect field delimiter (comma/semicolon/tab/pipe), with `--delimiter` override
+- [x] Flag constant columns (every value identical)
 
 ---
 
